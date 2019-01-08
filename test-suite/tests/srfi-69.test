@@ -28,80 +28,119 @@ case-insensitive strings to `equal?'-tested values."
   (and (string-ci=? (car left) (car right))
        (equal? (cdr left) (cdr right))))
 
+(define-syntax with-weakness-list
+  (syntax-rules ()
+    ((with-weakness-list weakness weakness-list expr ...)
+     (let loop ((weakness-list* weakness-list))
+       (or (null? weakness-list*)
+           (and (let ((weakness (car weakness-list*)))
+                  expr ...)
+                (loop (cdr weakness-list*))))))))
+
+(define (test-str-weakness str weakness)
+  (if (not weakness) str (format #f "~a (weak: ~a)" str weakness)))
+
 (with-test-prefix "SRFI-69"
 
-  (pass-if "small alist<->hash tables round-trip"
-    (let* ((start-alist '((a . 1) (b . 2) (c . 3) (a . 42)))
-	   (ht (alist->hash-table start-alist eq?))
-	   (end-alist (hash-table->alist ht)))
-      (and (= 3 (hash-table-size ht))
-	   (lset= equal? end-alist (take start-alist 3))
-	   (= 1 (hash-table-ref ht 'a))
-	   (= 2 (hash-table-ref ht 'b))
-	   (= 3 (hash-table-ref ht 'c)))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "small alist<->hash tables round-trip" weakness)
+      (let* ((start-alist '((a . 1) (b . 2) (c . 3) (a . 42)))
+             (ht (alist->hash-table start-alist eq? #:weak weakness))
+             (end-alist (hash-table->alist ht)))
+        (and (= 3 (hash-table-size ht))
+             (lset= equal? end-alist (take start-alist 3))
+             (= 1 (hash-table-ref ht 'a))
+             (= 2 (hash-table-ref ht 'b))
+             (= 3 (hash-table-ref ht 'c))))))
 
-  (pass-if "string-ci=? tables work by default"
-    (let ((ht (alist->hash-table '(("xY" . 2) ("abc" . 54)) string-ci=?)))
-      (hash-table-set! ht "XY" 42)
-      (hash-table-set! ht "qqq" 100)
-      (and (= 54 (hash-table-ref ht "ABc"))
-	   (= 42 (hash-table-ref ht "xy"))
-	   (= 3 (hash-table-size ht))
-	   (lset= string-ci-assoc-equal?
-		  '(("xy" . 42) ("abc" . 54) ("qqq" . 100))
-		  (hash-table->alist ht)))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "string-ci=? tables work by default" weakness)
+      (let ((ht (alist->hash-table '(("xY" . 2) ("abc" . 54)) string-ci=?
+                                   #:weak weakness)))
+        (hash-table-set! ht "XY" 42)
+        (hash-table-set! ht "qqq" 100)
+        (and (= 54 (hash-table-ref ht "ABc"))
+             (= 42 (hash-table-ref ht "xy"))
+             (= 3 (hash-table-size ht))
+             (lset= string-ci-assoc-equal?
+                    '(("xy" . 42) ("abc" . 54) ("qqq" . 100))
+                    (hash-table->alist ht))))))
 
   (pass-if-exception "Bad weakness arg to mht signals an error"
-		     '(misc-error . "^Invalid weak hash table type")
+      '(misc-error . "^Invalid weak hash table type")
     (make-hash-table equal? hash #:weak 'key-and-value))
 
-  (pass-if "empty hash tables are empty"
-    (null? (hash-table->alist (make-hash-table eq?))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "empty hash tables are empty" weakness)
+      (null? (hash-table->alist (make-hash-table eq? #:weak weakness)))))
 
-  (pass-if "hash-table-ref uses default"
-    (equal? '(4)
-	    (hash-table-ref (alist->hash-table '((a . 1)) eq?)
-			    'b (cut list (+ 2 2)))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "hash-table-ref uses default" weakness)
+      (equal? '(4)
+              (hash-table-ref (alist->hash-table '((a . 1)) eq? #:weak weakness)
+                              'b (cut list (+ 2 2))))))
 
-  (pass-if "hash-table-delete! deletes present assocs, ignores others"
-    (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq?)))
-      (hash-table-delete! ht 'c)
-      (and (= 2 (hash-table-size ht))
-	   (begin
-	     (hash-table-delete! ht 'a)
-	     (= 1 (hash-table-size ht)))
-	   (lset= equal? '((b . 2)) (hash-table->alist ht)))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "hash-table-delete! deletes present assocs, ignores others"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #:weak weakness)))
+        (hash-table-delete! ht 'c)
+        (and (= 2 (hash-table-size ht))
+             (begin
+               (hash-table-delete! ht 'a)
+               (= 1 (hash-table-size ht)))
+             (lset= equal? '((b . 2)) (hash-table->alist ht))))))
 
-  (pass-if "alist->hash-table does not require linear stack space"
-    (eqv? 99999
-	  (hash-table-ref (alist->hash-table
-			   (unfold-right (cut >= <> 100000)
-					 (lambda (s) `(x . ,s)) 1+ 0)
-			   eq?)
-			  'x)))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "alist->hash-table does not require linear stack space"
+                                weakness)
+      (eqv? 99999
+            (hash-table-ref (alist->hash-table
+                             (unfold-right (cut >= <> 100000)
+                                           (lambda (s) `(x . ,s)) 1+ 0)
+                             eq?
+                             #:weak weakness)
+                            'x))))
 
-  (pass-if "hash-table-walk ignores return values"
-    (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3)) eq?)))
-      (for-each (cut hash-table-walk ht <>)
-		(list (lambda (k v) (values))
-		      (lambda (k v) (values 1 2 3))))
-      #t))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "hash-table-walk ignores return values"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3)) eq?)))
+        (for-each (cut hash-table-walk ht <>)
+                  (list (lambda (k v) (values))
+                        (lambda (k v) (values 1 2 3))))
+        #t)))
 
-  (pass-if "hash-table-update! modifies existing binding"
-    (let ((ht (alist->hash-table '((a . 1)) eq?)))
-      (hash-table-update! ht 'a 1+)
-      (hash-table-update! ht 'a (cut + 4 <>) (lambda () 42))
-      (and (= 1 (hash-table-size ht))
-	   (lset= equal? '((a . 6)) (hash-table->alist ht)))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "hash-table-update! modifies existing binding"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1)) eq? #:weak weakness)))
+        (hash-table-update! ht 'a 1+)
+        (hash-table-update! ht 'a (cut + 4 <>) (lambda () 42))
+        (and (= 1 (hash-table-size ht))
+             (lset= equal? '((a . 6)) (hash-table->alist ht))))))
 
-  (pass-if "hash-table-update! creates new binding when appropriate"
-    (let ((ht (make-hash-table eq?)))
-      (hash-table-update! ht 'b 1+ (lambda () 42))
-      (hash-table-update! ht 'b (cut + 10 <>))
-      (and (= 1 (hash-table-size ht))
-	   (lset= equal? '((b . 53)) (hash-table->alist ht)))))
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "hash-table-update! creates new binding when appropriate"
+                                weakness)
+      (let ((ht (make-hash-table eq? #:weak weakness)))
+        (hash-table-update! ht 'b 1+ (lambda () 42))
+        (hash-table-update! ht 'b (cut + 10 <>))
+        (and (= 1 (hash-table-size ht))
+             (lset= equal? '((b . 53)) (hash-table->alist ht))))))
+
+  (with-weakness-list weakness (list #f 'key 'value 'key-or-value)
+    (pass-if (test-str-weakness "hash-table-merge! functions properly"
+                                weakness)
+      (let* ((ht1 (alist->hash-table '((a . 1) (b . 2)) eq? #:weak weakness))
+             (ht2 (alist->hash-table '((b . 3) (c . 4)) eq? #:weak weakness)))
+        (set! ht1 (hash-table-merge! ht1 ht2))
+        (and (= 3 (hash-table-size ht1))
+             (= 2 (hash-table-size ht2))
+             (lset= equal? '((a . 1) (b . 3) (c . 4)) (hash-table->alist ht1))
+             (lset= equal? '((b . 3) (c . 4)) (hash-table->alist ht2))))))
 
   (pass-if "can use all arguments, including size"
     (hash-table? (make-hash-table equal? hash #:weak 'key 31)))
 
-)
+  )

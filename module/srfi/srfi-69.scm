@@ -62,6 +62,14 @@
 ;; implementation, both answer ("xY").  However, I don't guarantee that
 ;; this won't change in the future.
 
+
+;;;; Commentary by Jessica Milare 2018
+
+;; Make bug fixes for weak hash-tables, since handles don't work anymore,
+;; and also some optimizations.
+;;
+;; My personal comments are marked by J.M.
+
 ;;; Code:
 
 ;;;; Module definition & exports
@@ -73,18 +81,18 @@
   #:use-module (ice-9 optargs)
   #:export (;; Type constructors & predicate
 	    make-hash-table hash-table? alist->hash-table
-	    ;; Reflective queries
-	    hash-table-equivalence-function hash-table-hash-function
-	    ;; Dealing with single elements
-	    hash-table-ref hash-table-ref/default hash-table-set!
-	    hash-table-delete! hash-table-exists? hash-table-update!
-	    hash-table-update!/default
-	    ;; Dealing with the whole contents
-	    hash-table-size hash-table-keys hash-table-values
-	    hash-table-walk hash-table-fold hash-table->alist
-	    hash-table-copy hash-table-merge!
-	    ;; Hashing
-	    string-ci-hash hash-by-identity)
+            ;; Reflective queries
+            hash-table-equivalence-function hash-table-hash-function
+            ;; Dealing with single elements
+            hash-table-ref hash-table-ref/default hash-table-set!
+            hash-table-delete! hash-table-exists? hash-table-update!
+            hash-table-update!/default
+            ;; Dealing with the whole contents
+            hash-table-size hash-table-keys hash-table-values
+            hash-table-walk hash-table-fold hash-table->alist
+            hash-table-copy hash-table-merge!
+            ;; Hashing
+            string-ci-hash hash-by-identity)
   #:re-export (string-hash)
   #:replace (hash make-hash-table hash-table?))
 
@@ -204,30 +212,32 @@ manual for specifics, of which there are many."
 	 (size (ht-size result)))
     (with-hashx-values (hash-proc associator real-table) result
       (for-each (lambda (pair)
-		  (let ((handle (hashx-get-handle hash-proc associator
-						  real-table (car pair))))
-		    (cond ((not handle)
-			   (set! size (1+ size))
-			   (hashx-set! hash-proc associator real-table
-				       (car pair) (cdr pair))))))
-		alist))
+                  (let ((value (hashx-ref hash-proc associator
+                                          real-table (car pair)
+                                          ht-unspecified)))
+                    (cond ((eq? ht-unspecified value)
+                           (set! size (1+ size))
+                           (hashx-set! hash-proc associator real-table
+                                       (car pair) (cdr pair))))))
+                alist))
     (ht-size! result size)
     result))
 
 ;;;; Accessing table items
 
 ;; We use this to denote missing or unspecified values to avoid
+
 ;; possible collision with *unspecified*.
 (define ht-unspecified (cons *unspecified* "ht-value"))
 
-(define (hash-table-ref ht key . default-thunk-lst)
+(define* (hash-table-ref ht key  #:optional (default-thunk ht-unspecified))
   "Lookup KEY in HT and answer the value, invoke DEFAULT-THUNK if KEY
 isn't present, or signal an error if DEFAULT-THUNK isn't provided."
   (let ((result (hashx-invoke hashx-ref ht key ht-unspecified)))
     (if (eq? ht-unspecified result)
-	(if (pair? default-thunk-lst)
-	    ((first default-thunk-lst))
-	    (error "Key not in table" key ht))
+	(if (eq? ht-unspecified default-thunk)
+	    (error "Key not in table" key ht)
+	    (default-thunk))
 	result)))
 
 (define (hash-table-ref/default ht key default)
@@ -237,49 +247,78 @@ present."
 
 (define (hash-table-set! ht key new-value)
   "Set KEY to NEW-VALUE in HT."
-  (let ((handle (hashx-invoke hashx-create-handle! ht key ht-unspecified)))
-    (if (eq? ht-unspecified (cdr handle))
-	(ht-size! ht (1+ (ht-size ht))))
-    (set-cdr! handle new-value))
+  (if (ht-weakness ht)
+      ;; J.M. separate the case where ht is weak - don't use handle
+      ;; J.M. don't need to update size for weak hash-tables
+      (hashx-invoke hashx-set! ht key new-value)
+      (let ((handle (hashx-invoke hashx-create-handle! ht key
+                                  ht-unspecified)))
+        (if (eq? ht-unspecified (cdr handle))
+            (ht-size! ht (1+ (ht-size ht))))
+        (set-cdr! handle new-value)))
   *unspecified*)
 
 (define (hash-table-delete! ht key)
   "Remove KEY's association in HT."
   (with-hashx-values (h a real-ht) ht
-    (if (hashx-get-handle h a real-ht key)
-	(begin
-	  (ht-size! ht (1- (ht-size ht)))
-	  (hashx-remove! h a real-ht key))))
+    (if (not (eq? ht-unspecified (hashx-ref h a real-ht key ht-unspecified)))
+        (begin
+          (ht-size! ht (1- (ht-size ht)))
+          (hashx-remove! h a real-ht key))))
   *unspecified*)
 
 (define (hash-table-exists? ht key)
   "Return whether KEY is a key in HT."
-  (and (hashx-invoke hashx-get-handle ht key) #t))
+  (not (eq? ht-unspecified (hashx-invoke hashx-ref ht key ht-unspecified))))
 
-;;; `hashx-set!' duplicates the hash lookup, but we use it anyway to
-;;; avoid creating a handle in case DEFAULT-THUNK exits
 ;;; `hash-table-update!' non-locally.
-(define (hash-table-update! ht key modifier . default-thunk-lst)
+(define* (hash-table-update! ht key modifier
+                             #:optional (default-thunk ht-unspecified))
   "Modify HT's value at KEY by passing its value to MODIFIER and
 setting it to the result thereof.  Invoke DEFAULT-THUNK for the old
 value if KEY isn't in HT, or signal an error if DEFAULT-THUNK is not
 provided."
   (with-hashx-values (hash-proc associator real-table) ht
-    (let ((handle (hashx-get-handle hash-proc associator real-table key)))
-      (cond (handle
-	     (set-cdr! handle (modifier (cdr handle))))
-	    (else
-	     (hashx-set! hash-proc associator real-table key
-			 (if (pair? default-thunk-lst)
-			     (modifier ((car default-thunk-lst)))
-			     (error "Key not in table" key ht)))
-	     (ht-size! ht (1+ (ht-size ht)))))))
+    (if (ht-weakness ht)
+        ;; J.M. separate the case where ht is weak - don't use handle
+        (let* ((old (hashx-ref hash-proc associator real-table key
+                               ht-unspecified)))
+          (cond ((eq? ht-unspecified old)
+                 (if (eq? ht-unspecified default-thunk)
+                     (error "Key not in table" key ht)
+                     (hashx-set! hash-proc associator real-table key
+                                 (modifier (default-thunk)))))
+                (else
+                 (hashx-set! hash-proc associator real-table key
+                             (modifier old)))))
+        (let ((handle (hashx-get-handle hash-proc associator real-table key)))
+          (cond (handle (if (eq? ht-unspecified (cdr handle))
+                            (begin (ht-size! ht (1+ (ht-size ht)))
+                                   (set-cdr! handle (modifier (default-thunk))))
+                            (set-cdr! handle (modifier (cdr handle)))))
+                (else (if (eq? ht-unspecified default-thunk)
+                          (error "Key not in table" key ht)
+                          (let ((default (default-thunk)))
+                            (ht-size! ht (1+ (ht-size ht)))
+                            (hashx-set! hash-proc associator real-table key
+                                        (modifier default)))))))))
   *unspecified*)
 
+;;; J.M. Custom implementation instead of using hash-table-update!
 (define (hash-table-update!/default ht key modifier default)
   "Modify HT's value at KEY by passing its old value, or DEFAULT if it
 doesn't have one, to MODIFIER, and setting it to the result thereof."
-  (hash-table-update! ht key modifier (lambda () default)))
+  (with-hashx-values (hash-proc associator real-table) ht
+    (if (ht-weakness ht)
+        ;; J.M. separate the case where ht is weak - don't use handle
+        (let* ((old (hashx-ref hash-proc associator real-table key default)))
+          (hashx-set! hash-proc associator real-table key (modifier old)))
+        (let ((handle (hashx-create-handle! hash-proc associator real-table key
+                                            ht-unspecified)))
+          (if (eq? ht-unspecified (cdr handle))
+              (begin (ht-size! ht (1+ (ht-size ht)))
+                     (set-cdr! handle (modifier default)))
+              (set-cdr! handle (modifier (cdr handle))))))))
 
 ;;;; Accessing whole tables
 
@@ -287,7 +326,9 @@ doesn't have one, to MODIFIER, and setting it to the result thereof."
   "Return the number of associations in HT.  This is guaranteed O(1)
 for tables where #:weak was #f or not specified at creation time."
   (if (ht-weakness ht)
-      (hash-table-fold ht (lambda (k v ans) (1+ ans)) 0)
+      (let ((size (hash-table-fold ht (lambda (k v ans) (1+ ans)) 0)))
+        (ht-size! ht size)
+        size)
       (ht-size ht)))
 
 (define (hash-table-keys ht)
@@ -300,10 +341,7 @@ for tables where #:weak was #f or not specified at creation time."
 
 (define (hash-table-walk ht proc)
   "Call PROC with each key and value as two arguments."
-  (hash-table-fold ht (lambda (k v unspec)
-                        (call-with-values (lambda () (proc k v))
-                          (lambda vals unspec)))
-		   *unspecified*))
+  (hash-for-each proc (ht-real-table ht)))
 
 (define (hash-table-fold ht f knil)
   "Invoke (F KEY VAL PREV) for each KEY and VAL in HT, where PREV is
@@ -313,15 +351,15 @@ Answer the final F result."
 
 (define (hash-table->alist ht)
   "Return an alist for HT."
-  (hash-table-fold ht alist-cons '()))
+  (hash-map->list cons (ht-real-table ht)))
 
 (define (hash-table-copy ht)
   "Answer a copy of HT."
   (with-hashx-values (h a real-ht) ht
     (let* ((size (hash-table-size ht)) (weak (ht-weakness ht))
 	   (new-real-ht ((guile-ht-ctor weak) size)))
-      (hash-fold (lambda (k v ign) (hashx-set! h a new-real-ht k v))
-		 #f real-ht)
+      (hash-for-each (lambda (k v) (hashx-set! h a new-real-ht k v))
+                     real-ht)
       (make-srfi-69-hash-table		;real,assoc,size,weak,equiv,h
        new-real-ht a size weak
        (hash-table-equivalence-function ht) h))))
@@ -329,8 +367,8 @@ Answer the final F result."
 (define (hash-table-merge! ht other-ht)
   "Add all key/value pairs from OTHER-HT to HT, overriding HT's
 mappings where present.  Return HT."
-  (hash-table-fold
-   ht (lambda (k v ign) (hash-table-set! ht k v)) #f)
+  (hash-for-each (lambda (k v) (hash-table-set! ht k v))
+                 (ht-real-table other-ht))
   ht)
 
 ;;; srfi-69.scm ends here
