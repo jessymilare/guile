@@ -1,0 +1,415 @@
+;;;; srfi-69.test --- Test suite for SRFI 69 -*- scheme -*-
+;;;;
+;;;; 	Copyright (C) 2007 Free Software Foundation, Inc.
+;;;;
+;;;; This library is free software; you can redistribute it and/or
+;;;; modify it under the terms of the GNU Lesser General Public
+;;;; License as published by the Free Software Foundation; either
+;;;; version 3 of the License, or (at your option) any later version.
+;;;;
+;;;; This library is distributed in the hope that it will be useful,
+;;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;;;; Lesser General Public License for more details.
+;;;;
+;;;; You should have received a copy of the GNU Lesser General Public
+;;;; License along with this library; if not, write to the Free Software
+;;;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+(define-module (test-generic-hash-tables)
+  #:use-module (test-suite lib)
+  #:use-module (ice-9 generic-hash-tables)
+  #:use-module (srfi srfi-1)
+  #:use-module (srfi srfi-8)
+  #:use-module (srfi srfi-26))
+
+(define (string-ci-assoc-equal? left right)
+  "Answer whether LEFT and RIGHT are equal, being associations of
+case-insensitive strings to `equal?'-tested values."
+  (and (string-ci=? (car left) (car right))
+       (equal? (cdr left) (cdr right))))
+
+(define-syntax with-elt-in-list
+  (syntax-rules ()
+    ((with-elt-in-list arg arg-list expr ...)
+     (let loop ((arg-list* arg-list))
+       (or (null? arg-list*)
+           (and (let ((arg (car arg-list*)))
+                  expr ...)
+                (loop (cdr arg-list*))))))))
+
+(define (test-str-weakness str weakness)
+  (if (not weakness) str (format #f "~a (weakness: ~a)" str weakness)))
+
+(with-test-prefix "generic-hash-tables"
+
+  (pass-if-exception "bad weakness arg to mht signals an error"
+      '(misc-error . "^Invalid hash table weakness")
+    (make-hash-table equal? hash #:weakness 'weak-key-or-value))
+
+  (pass-if-exception "unsupported weakness arg to mht signals an error"
+      '(misc-error . "^Unsupported hash table weakness")
+    (make-hash-table equal? hash #:weakness 'ephemeral-key))
+
+  (pass-if "can use all arguments, including size"
+    (hash-table? (make-hash-table equal? hash #:weakness 'weak-key 31)))
+
+  ;; The following tests are done once with each kind of weakness
+  (with-elt-in-list weakness (list #f 'weak-key 'weak-value 'weak-key-and-value)
+    (pass-if (test-str-weakness "reflective queries function properly" weakness)
+      (let ((ht (make-hash-table eqv? #f #:weakness weakness)))
+        (and (hash-table-mutable? ht)
+             (eq? eqv? (hash-table-equivalence-function ht))
+             (eq? hash-by-value (hash-table-hash-function ht))
+             (eq? weakness (hash-table-weakness ht))
+             (equal? (list (hash-table-key-weakness ht)
+                           (hash-table-value-weakness ht))
+                     (case weakness
+                       ((#f) '(#f #f))
+                       ((weak-key) '(weak-keys #f))
+                       ((weak-value) '(#f weak-values))
+                       ((weak-key-and-value) '(weak-keys weak-values)))))))
+
+    (pass-if (test-str-weakness "hash-table-contains? functions properly" weakness)
+      (let ((ht (make-hash-table eq? #f #:weakness weakness)))
+        (hash-table-set-single! ht 'a 1)
+        (and (hash-table-contains? ht 'a)
+             (not (hash-table-contains? ht 'b))
+             (begin (hash-table-set-single! ht 'b 1)
+                    (hash-table-contains? ht 'b))
+             (begin (hash-table-delete-single! ht 'a)
+                    (not (hash-table-contains? ht 'a))))))
+
+    (pass-if (test-str-weakness "small alist<->hash tables round-trip" weakness)
+      (let* ((start-alist '((a . 1) (b . 2) (c . 3) (a . 42)))
+             (ht (alist->hash-table start-alist eq? #f #:weakness weakness))
+             (end-alist (hash-table->alist ht)))
+        (and (= 3 (hash-table-size ht))
+             (lset= equal? end-alist (take start-alist 3))
+             (= 1 (hash-table-ref ht 'a))
+             (= 2 (hash-table-ref ht 'b))
+             (= 3 (hash-table-ref ht 'c)))))
+
+    (pass-if (test-str-weakness "string-ci=? tables work by default" weakness)
+      (let ((ht (alist->hash-table '(("xY" . 2) ("abc" . 54)) string-ci=? #f
+                                   #:weakness weakness)))
+        (hash-table-set! ht "XY" 42 "qqq" 100)
+        (and (= 54 (hash-table-ref ht "ABc"))
+             (= 42 (hash-table-ref ht "xy"))
+             (= 3 (hash-table-size ht))
+             (lset= string-ci-assoc-equal?
+                    '(("xy" . 42) ("abc" . 54) ("qqq" . 100))
+                    (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "empty hash tables are empty" weakness)
+      (let ((ht (make-hash-table eq? #f #:weakness weakness)))
+        (and (= 0 (hash-table-size ht))
+             (hash-table-empty? ht)
+             (null? (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table functions properly" weakness)
+      (let ((ht (hash-table (list eq? #f #:weakness weakness)
+                            'a 1 'b 2 'c 3)))
+        (and (= 3 (hash-table-size ht))
+             (lset= equal? '((a . 1) (b . 2) (c . 3)) (hash-table->alist ht))
+             (eq? weakness (hash-table-weakness ht))
+             (not (hash-table-mutable? ht)))))
+
+    (pass-if-exception
+        (test-str-weakness "hash-table with equivalent keys signals an error" weakness)
+        '(misc-error . "^Two equivalent keys were provided")
+      (hash-table (list string=? #f #:weakness weakness)
+                  "a" 1 "b" 2 "c" 3 "a" 4))
+
+    (pass-if (test-str-weakness "hash-table-unfold functions properly" weakness)
+      (let ((ht (hash-table-unfold (lambda (i) (>= i 5))
+                                   (lambda (i) (values i (* i 10)))
+                                   1+ 0
+                                   eqv? #f #:weakness weakness)))
+        (and (= 5 (hash-table-size ht))
+             (eq? weakness (hash-table-weakness ht))
+             (lset= equal? '((0 . 0) (1 . 10) (2 . 20) (3 . 30) (4 . 40))
+                    (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table=? functions properly" weakness)
+      (let ((ht1 (hash-table-unfold (lambda (i) (>= i 5))
+                                    (lambda (i) (values i (* i 10)))
+                                    1+ 0
+                                    eqv? #f #:weakness weakness))
+            (ht2 (alist->hash-table '((0 . 0) (1 . 10) (2 . 20) (3 . 30) (4 . 40))
+                                    eqv? #f #:weakness weakness))
+            (ht3 (alist->hash-table '((0 . 0) (1 . 10) (2 . 20) (3 . 30) (4 . 40))
+                                    equal? #f #:weakness weakness))
+            (ht4 (alist->hash-table '((0 . 10) (1 . 10) (2 . 20) (3 . 30) (4 . 40))
+                                    eqv? #f #:weakness weakness)))
+        (and (hash-table=? eqv? ht1 ht2)
+             (not (hash-table=? eqv? ht1 ht3))
+             (not (hash-table=? eqv? ht1 ht4))
+             (lset= equal? '((0 . 0) (1 . 10) (2 . 20) (3 . 30) (4 . 40))
+                    (hash-table->alist ht3)))))
+
+    (pass-if (test-str-weakness "hash-table-ref uses default" weakness)
+      (equal? '(4)
+              (hash-table-ref (alist->hash-table '((a . 1)) eq? #f
+                                                 #:weakness weakness)
+                              'b (cut list (+ 2 2)))))
+
+    (pass-if (test-str-weakness "hash-table-ref/default uses default" weakness)
+      (equal? 'foo
+              (hash-table-ref/default (alist->hash-table '((a . 1)) eq? #f
+                                                         #:weakness weakness)
+                                      'b 'foo)))
+
+    (pass-if (test-str-weakness "hash-table-delete! deletes present assocs, ignores others"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness)))
+        (and (= 0 (hash-table-delete! ht 'c))
+             (= 2 (hash-table-size ht))
+             (= 1 (hash-table-delete! ht 'a))
+             (= 1 (hash-table-size ht))
+             (lset= equal? '((b . 2)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-delete! deletes several keys"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (d . 4) (e . 5)) eq? #f
+                                   #:weakness weakness)))
+        (and (= 4 (hash-table-size ht))
+             (= 3 (hash-table-delete! ht 'a 'b 'c 'e))
+             (= 1 (hash-table-size ht))
+             (lset= equal? '((d . 4)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "alist->hash-table does not require linear stack space"
+                                weakness)
+      (eqv? 99999
+            (hash-table-ref
+             (alist->hash-table (unfold-right (cut >= <> 100000)
+                                              (lambda (s) `(x . ,s)) 1+ 0)
+                                eq? #f
+                                #:weakness weakness)
+             'x)))
+
+    (pass-if (test-str-weakness "hash-table-update! modifies existing binding"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1)) eq? #f #:weakness weakness)))
+        (hash-table-update! ht 'a 1+)
+        (hash-table-update! ht 'a (cut + 4 <>) (lambda () 42))
+        (and (= 1 (hash-table-size ht))
+             (lset= equal? '((a . 6)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-update! creates new binding when appropriate"
+                                weakness)
+      (let ((ht (make-hash-table eq? #f #:weakness weakness)))
+        (hash-table-update! ht 'b 1+ (lambda () 42))
+        (hash-table-update! ht 'b (cut + 10 <>))
+        (and (= 1 (hash-table-size ht))
+             (lset= equal? '((b . 53)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-intern! creates new binding"
+                                weakness)
+      (let ((ht (make-hash-table eq? #f #:weakness weakness)))
+        (and (= 1 (hash-table-intern! ht 'b (const 1)))
+             (= 1 (hash-table-size ht))
+             (lset= equal? '((b . 1)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-intern! doesn't modify existing binding"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1)) eq? #f #:weakness weakness)))
+        (and (= 1 (hash-table-intern! ht 'a (const 2)))
+             (= 1 (hash-table-size ht))
+             (lset= equal? '((a . 1)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-pop! functions properly"
+                                weakness)
+      (let* ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness))
+             (popped (receive (key val) (hash-table-pop! ht) (list key val))))
+        (or (and (equal? '(a 1) popped)
+                 (equal? '((b . 2)) (hash-table->alist ht)))
+            (and (equal? '(b 2) popped)
+                 (equal? '((a . 1)) (hash-table->alist ht))))))
+
+    (pass-if-exception
+        (test-str-weakness "hash-table-pop! with empty hash table signals an error"
+                           weakness)
+        '(misc-error . "^Hash table is empty")
+      (hash-table-pop! (make-hash-table eq? #f #:weakness weakness)))
+
+    (pass-if (test-str-weakness "hash-table-clear! functions properly"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness)))
+        (hash-table-clear! ht)
+        (and (= 0 (hash-table-size ht))
+             (hash-table-empty? ht)
+             (null? (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-find functions properly" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3)) eq? #f
+                                   #:weakness weakness)))
+        (and (eq? 'b (hash-table-find (lambda (key val) (and (even? val) key)) ht
+                                      (lambda () #f)))
+             (not (hash-table-find (lambda (key val) (= val 4)) ht
+                                   (lambda () #f))))))
+
+    (pass-if (test-str-weakness "hash-table-count functions properly" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3) (d . 4)) eq? #f
+                                   #:weakness weakness)))
+        (and (= 2 (hash-table-count (lambda (key val) (even? val)) ht))
+             (= 1 (hash-table-count (lambda (key val) (= val 4)) ht))
+             (= 0 (hash-table-count (lambda (key val) (= val 5)) ht)))))
+
+    (pass-if (test-str-weakness "hash table keys and values are correct" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3) (d . 4)) eq? #f
+                                   #:weakness weakness)))
+        (and (lset= eq? '(a b c d) (hash-table-keys ht))
+             (lset= =   '(1 2 3 4) (hash-table-values ht))
+             (receive (keys vals) (hash-table-entries ht)
+               (and (lset= eq? '(a b c d) keys)
+                    (lset= =   '(1 2 3 4) vals))))))
+
+    (pass-if (test-str-weakness "hash table key and value vectors are correct" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3) (d . 4)) eq? #f
+                                   #:weakness weakness)))
+        (and (lset= eq? '(a b c d) (vector->list (hash-table-key-vector ht)))
+             (lset= =   '(1 2 3 4) (vector->list (hash-table-value-vector ht)))
+             (receive (keys vals) (hash-table-entry-vectors ht)
+               (and (lset= eq? '(a b c d) (vector->list keys))
+                    (lset= =   '(1 2 3 4) (vector->list vals)))))))
+
+    (pass-if (test-str-weakness "hash-table-map functions properly" weakness)
+      (let* ((ht1 (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                     #:weakness weakness))
+             (ht2 (hash-table-map 1+ ht1 eq? #f)))
+        (and (= 2 (hash-table-size ht2))
+             (lset= equal? '((a . 2) (b . 3)) (hash-table->alist ht2)))))
+
+    (pass-if (test-str-weakness "hash-table-map! functions properly" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                   #:weakness weakness)))
+        (hash-table-map! (lambda (key val) (+ val 1)) ht)
+        (and (= 2 (hash-table-size ht))
+             (lset= equal? '((a . 2) (b . 3)) (hash-table->alist ht)))))
+
+    (pass-if (test-str-weakness "hash-table-for-each ignores return values"
+                                weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3)) eq? #f
+                                   #:weakness weakness)))
+        (for-each (cut hash-table-for-each <> ht)
+                  (list (lambda (k v) (values))
+                        (lambda (k v) (values 1 2 3))))
+        #t))
+
+    (pass-if (test-str-weakness "hash-table-map->list functions properly" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                   #:weakness weakness)))
+        (and (lset= eq? '(a b) (hash-table-map->list (lambda (key val) key) ht))
+             (lset= = '(1 2) (hash-table-map->list (lambda (key val) val) ht)))))
+
+    (pass-if (test-str-weakness "hash-table-fold functions properly" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                   #:weakness weakness)))
+        (= 3 (hash-table-fold (lambda (key val acc) (+ val acc))
+                              0 ht))))
+
+    (pass-if (test-str-weakness "hash-table-prune! functions properly" weakness)
+      (let ((ht (alist->hash-table '((a . 1) (b . 2) (c . 3) (d . 4)) eq? #f
+                                   #:weakness weakness)))
+        (hash-table-prune! (lambda (key val) (even? val)) ht)
+        (lset= equal? '((a . 1) (c . 3)) (hash-table->alist ht))))
+
+    (pass-if (test-str-weakness "hash-table-copy functions properly" weakness)
+      (let ((ht (hash-table-copy (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                                    #:weakness weakness)
+                                 #:mutable #t)))
+        (and (= 2 (hash-table-size ht))
+             (lset= equal? '((a . 1) (b . 2)) (hash-table->alist ht))
+             (hash-table-mutable? ht))))
+
+    (pass-if (test-str-weakness "hash-table-union! functions properly"
+                                weakness)
+      (let* ((ht1 (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness))
+             (ht2 (alist->hash-table '((b . 3) (c . 4)) eq? #f #:weakness weakness)))
+        (set! ht1 (hash-table-union! ht1 ht2))
+        (and (= 3 (hash-table-size ht1))
+             (= 2 (hash-table-size ht2))
+             (lset= equal? '((a . 1) (b . 2) (c . 4)) (hash-table->alist ht1))
+             (lset= equal? '((b . 3) (c . 4)) (hash-table->alist ht2)))))
+
+    (pass-if (test-str-weakness "hash-table-intersection! functions properly"
+                                weakness)
+      (let* ((ht1 (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness))
+             (ht2 (alist->hash-table '((b . 3) (c . 4)) eq? #f #:weakness weakness)))
+        (set! ht1 (hash-table-intersection! ht1 ht2))
+        (and (= 1 (hash-table-size ht1))
+             (= 2 (hash-table-size ht2))
+             (lset= equal? '((b . 2)) (hash-table->alist ht1))
+             (lset= equal? '((b . 3) (c . 4)) (hash-table->alist ht2)))))
+
+    (pass-if (test-str-weakness "hash-table-difference! functions properly"
+                                weakness)
+      (let* ((ht1 (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness))
+             (ht2 (alist->hash-table '((b . 3) (c . 4)) eq? #f #:weakness weakness)))
+        (set! ht1 (hash-table-difference! ht1 ht2))
+        (and (= 1 (hash-table-size ht1))
+             (= 2 (hash-table-size ht2))
+             (lset= equal? '((a . 1)) (hash-table->alist ht1))
+             (lset= equal? '((b . 3) (c . 4)) (hash-table->alist ht2)))))
+
+    (pass-if (test-str-weakness "hash-table-xor! functions properly"
+                                weakness)
+      (let* ((ht1 (alist->hash-table '((a . 1) (b . 2)) eq? #f #:weakness weakness))
+             (ht2 (alist->hash-table '((b . 3) (c . 4)) eq? #f #:weakness weakness)))
+        (set! ht1 (hash-table-xor! ht1 ht2))
+        (and (= 2 (hash-table-size ht1))
+             (= 2 (hash-table-size ht2))
+             (lset= equal? '((a . 1) (c . 4)) (hash-table->alist ht1))
+             (lset= equal? '((b . 3) (c . 4)) (hash-table->alist ht2)))))
+
+    (pass-if (test-str-weakness "immutable hash tables are immutable" weakness)
+      (let ((ht (hash-table-copy (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                                    #:weakness weakness)
+                                 #:mutable #f)))
+        (and (= 2 (hash-table-size ht))
+             (not (hash-table-mutable? ht)))))
+
+    ;; Tests whether each of the following procedure signals an error on
+    ;; immutable hash tables
+    (with-elt-in-list sym+proc
+        (list
+         (cons 'hash-table-set!
+               (lambda (ht) (hash-table-set! ht 'a 2 'b 3)))
+         (cons 'hash-table-set-single!
+               (lambda (ht) (hash-table-set-single! ht 'a 2)))
+         (cons 'hash-table-delete!
+               (lambda (ht) (hash-table-delete! ht 'a 'b)))
+         (cons 'hash-table-delete-single!
+               (lambda (ht) (hash-table-delete-single! ht 'a)))
+         (cons 'hash-table-intern!
+               (lambda (ht) (hash-table-intern! ht 'a (const 2))))
+         (cons 'hash-table-update!
+               (lambda (ht) (hash-table-update! ht 'a 1+)))
+         (cons 'hash-table-update!/default
+               (lambda (ht) (hash-table-update!/default ht 'a 1+ 0)))
+         (cons 'hash-table-pop!
+               (lambda (ht) (hash-table-pop! ht)))
+         (cons 'hash-table-clear!
+               (lambda (ht) (hash-table-clear! ht)))
+         (cons 'hash-table-prune!
+               (lambda (ht) (hash-table-prune! (lambda (key val) #t) ht)))
+         (cons 'hash-table-union!
+               (lambda (ht) (hash-table-union! ht ht)))
+         (cons 'hash-table-intersection!
+               (lambda (ht) (hash-table-intersection! ht ht)))
+         (cons 'hash-table-difference!
+               (lambda (ht) (hash-table-difference! ht ht)))
+         (cons 'hash-table-xor!
+               (lambda (ht) (hash-table-xor! ht ht))))
+      (pass-if-exception
+          (test-str-weakness
+           (format #f "~a with immutable hash table signals an error" (car sym+proc))
+           weakness)
+          '(misc-error . "^Hash table is not mutable")
+        (let ((ht (hash-table-copy (alist->hash-table '((a . 1) (b . 2)) eq? #f
+                                                      #:weakness weakness)
+                                   #:mutable #f)))
+          ((cdr sym+proc) ht))))
+    )
+  )

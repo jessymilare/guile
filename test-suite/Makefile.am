@@ -63,6 +63,7 @@ SCM_TESTS = tests/00-initial-env.test		\
 	    tests/ftw.test			\
 	    tests/future.test			\
 	    tests/gc.test			\
+            tests/generic-hash-tables.test      \
 	    tests/getopt-long.test		\
 	    tests/goops.test			\
 	    tests/guardians.test		\
