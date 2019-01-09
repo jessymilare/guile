@@ -67,6 +67,7 @@
 				   hash-table-fold)
 		  (hash equal-hash)
 		  (hash-by-identity symbol-hash))
+          (only (ice-9 generic-hash-tables) hash-by-value)
 	  (rnrs base (6))
 	  (rnrs records procedural (6)))
   
@@ -90,9 +91,9 @@
 
   (define hashtable-mutable? r6rs:hashtable-mutable?)
 
-  (define hash-by-value ((@@ (srfi srfi-69) caller-with-default-size) hashv))
-  (define (wrap-hash-function proc) 
-    (lambda (key capacity) (modulo (proc key) capacity)))
+  ;; (define hash-by-value ((@@ (srfi srfi-69) caller-with-default-size) hashv))
+  ;; (define (wrap-hash-function proc)
+  ;;   (lambda (key capacity) (modulo (proc key) capacity)))
 
   (define* (make-eq-hashtable #:optional k)
     (make-r6rs-hashtable 
@@ -109,14 +110,13 @@
      'eqv))
 
   (define* (make-hashtable hash-function equiv #:optional k)
-    (let ((wrapped-hash-function (wrap-hash-function hash-function)))
-      (make-r6rs-hashtable
-       (if k 
-	   (make-hash-table equiv wrapped-hash-function k)
-	   (make-hash-table equiv wrapped-hash-function))
-       hash-function
-       #t
-       'custom)))
+    (make-r6rs-hashtable
+     (if k
+         (make-hash-table equiv hash-function k)
+         (make-hash-table equiv hash-function))
+     hash-function
+     #t
+     'custom))
  
   (define (hashtable-size hashtable)
     (hash-table-size (r6rs:hashtable-wrapped-table hashtable)))
@@ -156,13 +156,12 @@
     (if (r6rs:hashtable-mutable? hashtable)
 	(let* ((ht (r6rs:hashtable-wrapped-table hashtable))
 	       (equiv (hash-table-equivalence-function ht))
-	       (hash-function (r6rs:hashtable-orig-hash-function hashtable))
-	       (wrapped-hash-function (wrap-hash-function hash-function)))
+	       (hash-function (r6rs:hashtable-orig-hash-function hashtable)))
 	  (r6rs:hashtable-set-wrapped-table!
 	   hashtable
 	   (if k 
-	       (make-hash-table equiv wrapped-hash-function k)
-	       (make-hash-table equiv wrapped-hash-function)))))
+	       (make-hash-table equiv hash-function k)
+	       (make-hash-table equiv hash-function)))))
     *unspecified*)
 
   (define (hashtable-keys hashtable)

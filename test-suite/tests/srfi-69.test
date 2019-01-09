@@ -141,6 +141,7 @@ case-insensitive strings to `equal?'-tested values."
              (lset= equal? '((b . 3) (c . 4)) (hash-table->alist ht2))))))
 
   (pass-if "can use all arguments, including size"
-    (hash-table? (make-hash-table equal? hash #:weak 'key 31)))
+    (let ((ht (make-hash-table equal? hash #:weak 'key 31)))
+      (hash-table? ht)))
 
   )
