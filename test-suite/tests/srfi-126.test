@@ -1,6 +1,6 @@
-;;;; srfi-69.test --- Test suite for SRFI 69 -*- scheme -*-
+;;;; srfi-126.test --- Test suite for SRFI 126 -*- scheme -*-
 ;;;;
-;;;; 	Copyright (C) 2007 Free Software Foundation, Inc.
+;;;; Copyright (C) 2019 Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
