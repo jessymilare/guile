@@ -1,0 +1,348 @@
+;;;; srfi-128.test --- Test suite for SRFI 128 -*- scheme -*-
+;;;;
+;;;; 	Copyright (C) 2019 Free Software Foundation, Inc.
+;;;;
+;;;; This library is free software; you can redistribute it and/or
+;;;; modify it under the terms of the GNU Lesser General Public
+;;;; License as published by the Free Software Foundation; either
+;;;; version 3 of the License, or (at your option) any later version.
+;;;;
+;;;; This library is distributed in the hope that it will be useful,
+;;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;;;; Lesser General Public License for more details.
+;;;;
+;;;; You should have received a copy of the GNU Lesser General Public
+;;;; License along with this library; if not, write to the Free Software
+;;;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+;;; The following tests are the tests from SRFI-126 reference
+;;; implementation ported to Guile test suite.
+
+;; This file contains code from SRFI 128 reference implementation, by
+;; John Cowan
+
+;;; Copyright (C) John Cowan (2015). All Rights Reserved.
+;;;
+;;; Permission is hereby granted, free of charge, to any person
+;;; obtaining a copy of this software and associated documentation
+;;; files (the "Software"), to deal in the Software without
+;;; restriction, including without limitation the rights to use,
+;;; copy, modify, merge, publish, distribute, sublicense, and/or
+;;; sell copies of the Software, and to permit persons to whom the
+;;; Software is furnished to do so, subject to the following
+;;; conditions:
+;;;
+;;; The above copyright notice and this permission notice shall be
+;;; included in all copies or substantial portions of the Software.
+;;;
+;;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+;;; EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+;;; OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+;;; NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+;;; HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+;;; WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+;;; FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+;;; OTHER DEALINGS IN THE SOFTWARE.
+
+(define-module (test-srfi-128)
+  #:use-module (test-suite lib)
+  #:use-module (srfi srfi-128)
+  #:use-module (srfi srfi-1)
+  #:use-module (srfi srfi-2)
+  #:use-module (srfi srfi-8)
+  #:use-module (rnrs bytevectors))
+
+(define (vector-cdr vec)
+  (let* ((len (vector-length vec))
+         (result (make-vector (- len 1))))
+    (let loop ((n 1))
+      (cond
+       ((= n len) result)
+       (else (vector-set! result (- n 1) (vector-ref vec n))
+             (loop (+ n 1)))))))
+
+(define default-comparator (make-default-comparator))
+
+(define real-comparator (make-comparator real? = < number-hash))
+
+(define degenerate-comparator (make-comparator (lambda (x) #t) equal? #f #f))
+
+(define boolean-comparator
+  (make-comparator boolean? eq? (lambda (x y) (and (not x) y)) boolean-hash))
+
+(define bool-pair-comparator
+  (make-pair-comparator boolean-comparator boolean-comparator))
+
+(define num-list-comparator
+  (make-list-comparator real-comparator list? null? car cdr))
+
+(define num-vector-comparator
+  (make-vector-comparator real-comparator vector? vector-length vector-ref))
+
+(define vector-qua-list-comparator
+  (make-list-comparator
+   real-comparator
+   vector?
+   (lambda (vec) (= 0 (vector-length vec)))
+   (lambda (vec) (vector-ref vec 0))
+   vector-cdr))
+
+(define list-qua-vector-comparator
+  (make-vector-comparator default-comparator list? length list-ref))
+
+(define eq-comparator (make-eq-comparator))
+
+(define eqv-comparator (make-eqv-comparator))
+
+(define equal-comparator (make-equal-comparator))
+
+(define symbol-comparator
+  (make-comparator
+   symbol?
+   eq?
+   (lambda (a b) (string<? (symbol->string a) (symbol->string b)))
+   symbol-hash))
+
+
+(with-test-prefix "SRFI-128"
+
+  (pass-if-equal '#(2 3 4) (vector-cdr '#(1 2 3 4)))
+  (pass-if-equal '#() (vector-cdr '#(1)))
+
+  (with-test-prefix "comparators/predicates"
+    (pass-if (comparator? real-comparator))
+    (pass-if (not (comparator? =)))
+    (pass-if (comparator-ordered? real-comparator))
+    (pass-if (comparator-hashable? real-comparator))
+    (pass-if (not (comparator-ordered? degenerate-comparator)))
+    (pass-if (not (comparator-hashable? degenerate-comparator)))
+    ) ; end comparators/predicates
+
+  (with-test-prefix "comparators/constructors"
+    (pass-if (=? boolean-comparator #t #t))
+    (pass-if (not (=? boolean-comparator #t #f)))
+    (pass-if (<? boolean-comparator #f #t))
+    (pass-if (not (<? boolean-comparator #t #t)))
+    (pass-if (not (<? boolean-comparator #t #f)))
+
+    (pass-if (comparator-test-type bool-pair-comparator '(#t . #f)))
+    (pass-if (not (comparator-test-type bool-pair-comparator 32)))
+    (pass-if (not (comparator-test-type bool-pair-comparator '(32 . #f))))
+    (pass-if (not (comparator-test-type bool-pair-comparator '(#t . 32))))
+    (pass-if (not (comparator-test-type bool-pair-comparator '(32 . 34))))
+    (pass-if (=? bool-pair-comparator '(#t . #t) '(#t . #t)))
+    (pass-if (not (=? bool-pair-comparator '(#t . #t) '(#f . #t))))
+    (pass-if (not (=? bool-pair-comparator '(#t . #t) '(#t . #f))))
+    (pass-if (<? bool-pair-comparator '(#f . #t) '(#t . #t)))
+    (pass-if (<? bool-pair-comparator '(#t . #f) '(#t . #t)))
+    (pass-if (not (<? bool-pair-comparator '(#t . #t) '(#t . #t))))
+    (pass-if (not (<? bool-pair-comparator '(#t . #t) '(#f . #t))))
+    (pass-if (not (<? bool-pair-comparator '(#f . #t) '(#f . #f))))
+
+    (pass-if (comparator-test-type num-vector-comparator '#(1 2 3)))
+    (pass-if (comparator-test-type num-vector-comparator '#()))
+    (pass-if (not (comparator-test-type num-vector-comparator 1)))
+    (pass-if (not (comparator-test-type num-vector-comparator '#(a 2 3))))
+    (pass-if (not (comparator-test-type num-vector-comparator '#(1 b 3))))
+    (pass-if (not (comparator-test-type num-vector-comparator '#(1 2 c))))
+    (pass-if (=? num-vector-comparator '#(1 2 3) '#(1 2 3)))
+    (pass-if (not (=? num-vector-comparator '#(1 2 3) '#(4 5 6))))
+    (pass-if (not (=? num-vector-comparator '#(1 2 3) '#(1 5 6))))
+    (pass-if (not (=? num-vector-comparator '#(1 2 3) '#(1 2 6))))
+    (pass-if (<? num-vector-comparator '#(1 2) '#(1 2 3)))
+    (pass-if (<? num-vector-comparator '#(1 2 3) '#(2 3 4)))
+    (pass-if (<? num-vector-comparator '#(1 2 3) '#(1 3 4)))
+    (pass-if (<? num-vector-comparator '#(1 2 3) '#(1 2 4)))
+    (pass-if (<? num-vector-comparator '#(3 4) '#(1 2 3)))
+    (pass-if (not (<? num-vector-comparator '#(1 2 3) '#(1 2 3))))
+    (pass-if (not (<? num-vector-comparator '#(1 2 3) '#(1 2))))
+    (pass-if (not (<? num-vector-comparator '#(1 2 3) '#(0 2 3))))
+    (pass-if (not (<? num-vector-comparator '#(1 2 3) '#(1 1 3))))
+
+    (pass-if (not (<? vector-qua-list-comparator '#(3 4) '#(1 2 3))))
+    (pass-if (<? list-qua-vector-comparator '(3 4) '(1 2 3)))
+
+    (let ((bool-pair (cons #t #f))
+          (bool-pair-2 (cons #t #f))
+          (reverse-bool-pair (cons #f #t)))
+      (pass-if (=? eq-comparator #t #t))
+      (pass-if (not (=? eq-comparator #f #t)))
+      (pass-if (=? eqv-comparator bool-pair bool-pair))
+      (pass-if (not (=? eqv-comparator bool-pair bool-pair-2)))
+      (pass-if (=? equal-comparator bool-pair bool-pair-2))
+      (pass-if (not (=? equal-comparator bool-pair reverse-bool-pair))))
+    ) ; end comparators/constructors
+
+  (with-test-prefix "comparators/hash"
+    (pass-if (exact-integer? (boolean-hash #f)))
+    (pass-if (not (negative? (boolean-hash #t))))
+    (pass-if (exact-integer? (char-hash #\a)))
+    (pass-if (not (negative? (char-hash #\b))))
+    (pass-if (exact-integer? (char-ci-hash #\a)))
+    (pass-if (not (negative? (char-ci-hash #\b))))
+    (pass-if (= (char-ci-hash #\a) (char-ci-hash #\A)))
+    (pass-if (exact-integer? (string-hash "f")))
+    (pass-if (not (negative? (string-hash "g"))))
+    (pass-if (exact-integer? (string-ci-hash "f")))
+    (pass-if (not (negative? (string-ci-hash "g"))))
+    (pass-if (= (string-ci-hash "f") (string-ci-hash "F")))
+    (pass-if (exact-integer? (symbol-hash 'f)))
+    (pass-if (not (negative? (symbol-hash 't))))
+    (pass-if (exact-integer? (number-hash 3)))
+    (pass-if (not (negative? (number-hash 3))))
+    (pass-if (exact-integer? (number-hash -3)))
+    (pass-if (not (negative? (number-hash -3))))
+    (pass-if (exact-integer? (number-hash 3.0)))
+    (pass-if (not (negative? (number-hash 3.0))))
+    (pass-if (exact-integer? (number-hash 3.47)))
+    (pass-if (not (negative? (number-hash 3.47))))
+    (pass-if (exact-integer? (default-hash '())))
+    (pass-if (not (negative? (default-hash '()))))
+    (pass-if (exact-integer? (default-hash '(a "b" #\c #(dee) 2.718))))
+    (pass-if (not (negative? (default-hash '(a "b" #\c #(dee) 2.718)))))
+    (pass-if (exact-integer? (default-hash '#u8())))
+    (pass-if (not (negative? (default-hash '#u8()))))
+    (pass-if (exact-integer? (default-hash '#u8(8 6 3))))
+    (pass-if (not (negative? (default-hash '#u8(8 6 3)))))
+    (pass-if (exact-integer? (default-hash '#())))
+    (pass-if (not (negative? (default-hash '#()))))
+    (pass-if (exact-integer? (default-hash '#(a "b" #\c #(dee) 2.718))))
+    (pass-if (not (negative? (default-hash '#(a "b" #\c #(dee) 2.718)))))
+
+    ) ; end comparators/hash
+
+  (with-test-prefix "comparators/default"
+    (pass-if (<? default-comparator '() '(a)))
+    (pass-if (not (=? default-comparator '() '(a))))
+    (pass-if (=? default-comparator #t #t))
+    (pass-if (not (=? default-comparator #t #f)))
+    (pass-if (<? default-comparator #f #t))
+    (pass-if (not (<? default-comparator #t #t)))
+    (pass-if (=? default-comparator #\a #\a))
+    (pass-if (<? default-comparator #\a #\b))
+
+    (pass-if (comparator-test-type default-comparator '()))
+    (pass-if (comparator-test-type default-comparator #t))
+    (pass-if (comparator-test-type default-comparator #\t))
+    (pass-if (comparator-test-type default-comparator '(a)))
+    (pass-if (comparator-test-type default-comparator 'a))
+    (pass-if (comparator-test-type default-comparator (make-bytevector 10)))
+    (pass-if (comparator-test-type default-comparator 10))
+    (pass-if (comparator-test-type default-comparator 10.0))
+    (pass-if (comparator-test-type default-comparator "10.0"))
+    (pass-if (comparator-test-type default-comparator '#(10)))
+
+    (pass-if (=? default-comparator '(#t . #t) '(#t . #t)))
+    (pass-if (not (=? default-comparator '(#t . #t) '(#f . #t))))
+    (pass-if (not (=? default-comparator '(#t . #t) '(#t . #f))))
+    (pass-if (<? default-comparator '(#f . #t) '(#t . #t)))
+    (pass-if (<? default-comparator '(#t . #f) '(#t . #t)))
+    (pass-if (not (<? default-comparator '(#t . #t) '(#t . #t))))
+    (pass-if (not (<? default-comparator '(#t . #t) '(#f . #t))))
+    (pass-if (not (<? default-comparator '#(#f #t) '#(#f #f))))
+
+    (pass-if (=? default-comparator '#(#t #t) '#(#t #t)))
+    (pass-if (not (=? default-comparator '#(#t #t) '#(#f #t))))
+    (pass-if (not (=? default-comparator '#(#t #t) '#(#t #f))))
+    (pass-if (<? default-comparator '#(#f #t) '#(#t #t)))
+    (pass-if (<? default-comparator '#(#t #f) '#(#t #t)))
+    (pass-if (not (<? default-comparator '#(#t #t) '#(#t #t))))
+    (pass-if (not (<? default-comparator '#(#t #t) '#(#f #t))))
+    (pass-if (not (<? default-comparator '#(#f #t) '#(#f #f))))
+
+    (pass-if (= (comparator-hash default-comparator #t) (boolean-hash #t)))
+    (pass-if (= (comparator-hash default-comparator #\t) (char-hash #\t)))
+    (pass-if (= (comparator-hash default-comparator "t") (string-hash "t")))
+    (pass-if (= (comparator-hash default-comparator 't) (symbol-hash 't)))
+    (pass-if (= (comparator-hash default-comparator 10) (number-hash 10)))
+    (pass-if (= (comparator-hash default-comparator 10.0) (number-hash 10.0)))
+
+    (comparator-register-default!
+     (make-comparator procedure? (lambda (a b) #t) (lambda (a b) #f) (lambda (obj) 200)))
+    (pass-if (=? default-comparator (lambda () #t) (lambda () #f)))
+    (pass-if (not (<? default-comparator (lambda () #t) (lambda () #f))))
+    (pass-if-equal 200 (comparator-hash default-comparator (lambda () #t)))
+
+    ) ; end comparators/default
+
+  ;; SRFI 128 does not actually require a comparator's four procedures
+  ;; to be eq? to the procedures originally passed to make-comparator.
+  ;; For interoperability/interchangeability between the comparators
+  ;; of SRFI 114 and SRFI 128, some of the procedures passed to
+  ;; make-comparator may need to be wrapped inside another lambda
+  ;; expression before they're returned by the corresponding accessor.
+  ;;
+  ;; So this next group of tests is incorrect, hence commented out
+  ;; and replaced by a slightly less naive group of tests.
+
+  #;
+  (with-test-prefix "comparators/accessors"
+  (define ttp (lambda (x) #t))
+  (define eqp (lambda (x y) #t))
+  (define orp (lambda (x y) #t))
+  (define hf (lambda (x) 0))
+  (define comp (make-comparator ttp eqp orp hf))
+  (pass-if-equal ttp (comparator-type-test-predicate comp))
+  (pass-if-equal eqp (comparator-equality-predicate comp))
+  (pass-if-equal orp (comparator-ordering-predicate comp))
+  (pass-if-equal hf (comparator-hash-function comp))
+  ) ; end comparators/accessors
+
+  (with-test-prefix "comparators/accessors"
+    (let* ((x1 0)
+           (x2 0)
+           (x3 0)
+           (x4 0)
+           (ttp (lambda (x) (set! x1 111) #t))
+           (eqp (lambda (x y) (set! x2 222) #t))
+           (orp (lambda (x y) (set! x3 333) #t))
+           (hf (lambda (x) (set! x4 444) 0))
+           (comp (make-comparator ttp eqp orp hf)))
+      (pass-if-equal #t (and ((comparator-type-test-predicate comp) x1)   (= x1 111)))
+      (pass-if-equal #t (and ((comparator-equality-predicate comp) x1 x2) (= x2 222)))
+      (pass-if-equal #t (and ((comparator-ordering-predicate comp) x1 x3) (= x3 333)))
+      (pass-if-equal #t (and (zero? ((comparator-hash-function comp) x1)) (= x4 444))))
+    ) ; end comparators/accessors
+
+  (with-test-prefix "comparators/invokers"
+    (pass-if (comparator-test-type real-comparator 3))
+    (pass-if (comparator-test-type real-comparator 3.0))
+    (pass-if (not (comparator-test-type real-comparator "3.0")))
+    (pass-if (comparator-check-type boolean-comparator #t))
+    (pass-if-exception "check-type"
+        '(misc-error . "^Comparator type check failed")
+      (comparator-check-type boolean-comparator 't))
+    ) ; end comparators/invokers
+
+  (with-test-prefix "comparators/comparison"
+    (pass-if (=? real-comparator 2 2.0 2))
+    (pass-if (<? real-comparator 2 3.0 4))
+    (pass-if (>? real-comparator 4.0 3.0 2))
+    (pass-if (<=? real-comparator 2.0 2 3.0))
+    (pass-if (>=? real-comparator 3 3.0 2))
+    (pass-if (not (=? real-comparator 1 2 3)))
+    (pass-if (not (<? real-comparator 3 1 2)))
+    (pass-if (not (>? real-comparator 1 2 3)))
+    (pass-if (not (<=? real-comparator 4 3 3)))
+    (pass-if (not (>=? real-comparator 3 4 4.0)))
+
+    ) ; end comparators/comparison
+
+  (with-test-prefix "comparators/syntax"
+    (pass-if-equal 'less (comparator-if<=> real-comparator 1 2 'less 'equal 'greater))
+    (pass-if-equal 'equal (comparator-if<=> real-comparator 1 1 'less 'equal 'greater))
+    (pass-if-equal 'greater (comparator-if<=> real-comparator 2 1 'less 'equal 'greater))
+    (pass-if-equal 'less (comparator-if<=> "1" "2" 'less 'equal 'greater))
+    (pass-if-equal 'equal (comparator-if<=> "1" "1" 'less 'equal 'greater))
+    (pass-if-equal 'greater (comparator-if<=> "2" "1" 'less 'equal 'greater))
+
+    ) ; end comparators/syntax
+
+  (with-test-prefix "comparators/bound-salt"
+    (pass-if (exact-integer? (hash-bound)))
+    (pass-if (exact-integer? (hash-salt)))
+    (pass-if (< (hash-salt) (hash-bound)))
+    #;  (pass-if-equal (hash-salt) (fake-salt-hash #t))  ; no such thing as fake-salt-hash
+    ) ; end comparators/bound-salt
+  )
