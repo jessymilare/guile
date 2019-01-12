@@ -517,19 +517,20 @@ number of keys that had associations."
           (if (hash-table-delete-single! ht key1) 1 0))
       (begin
         (assert-mutable ht)
-        (let* ((count 0)
-               (delete-one! (lambda (key)
-                              (with-hashx-values (h a real-table) ht
+        (with-hashx-values (h a real-table) ht
+          (let* ((count 0)
+                 (size (ht-size ht))
+                 (delete-one! (lambda (key)
                                 (when (not (eq? ht-unspecified
                                                 (hashx-ref h a real-table key
                                                            ht-unspecified)))
                                   (set! count (+ 1 count))
-                                  (hashx-remove! h a real-table key))))))
-          (delete-one! key1)
-          (for-each delete-one! keys)
-          (unless (or (ht-weakness ht) (zero? count))
-            (ht-size! ht (- (ht-size ht) count)))
-          count))))
+                                  (hashx-remove! h a real-table key)))))
+            (delete-one! key1)
+            (for-each delete-one! keys)
+            (unless (or (ht-weakness ht) (zero? count))
+              (ht-size! ht (- size count)))
+            count)))))
 
 (define (hash-table-intern! ht key failure)
   "Effectively invokes HASH-TABLE-REF with the given arguments and
@@ -820,8 +821,10 @@ PROC returns true. Returns an unspecified value."
   (assert-mutable ht)
   (with-hashx-values (h a real-table) ht
     (hash-for-each (lambda (key val)
-                     (if (proc key val)
-                         (hashx-remove! h a real-table key)))
+                     (when (proc key val)
+                       (unless (ht-weakness ht)
+                         (ht-size! ht (- (ht-size ht) 1)))
+                       (hashx-remove! h a real-table key)))
                    real-table)))
 
 
