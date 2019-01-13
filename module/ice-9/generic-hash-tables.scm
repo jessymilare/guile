@@ -187,19 +187,16 @@ alist keys with EQUIV-FUNCTION."
 
 (define-record-type generic-hash-table
   (make-generic-hash-table real-table hash-function associator weakness
-                           mutable? size equivalence-function original-hash-function)
+                           mutable? equivalence-function original-hash-function)
   hash-table?
   ;; These three are the most accessed fields.
   (real-table ht-real-table ht-real-table!)
   (hash-function ht-hash-function)
   (associator ht-associator)
-  ;; Weak hash tables don't use handles and don't update ht-size.
+  ;; Weak hash tables don't use handles.
   (weakness ht-weakness)
   ;; Supports immutability.
   (mutable? hash-table-mutable?)
-  ;; Size of hash-table, allowing O(1) hash-table-size for
-  ;; non-weak hash tables.
-  (size ht-size ht-size!)
   ;; These are mostly needed for reflective queries
   (equivalence-function hash-table-equivalence-function)
   (original-hash-function hash-table-hash-function))
@@ -239,10 +236,10 @@ alist keys with EQUIV-FUNCTION."
       (get-hash-functions equiv-function hash-function)
     (let ((real-table ((guile-ht-ctor weakness) capacity)))
       ;; Arguments: real-table hash-function associator
-      ;;            weakness mutable? size equivalence-function orig-hash-function
+      ;;            weakness mutable? equivalence-function orig-hash-function
       (make-generic-hash-table real-table internal-hash-function
                                (equivalence-proc->associator equiv-function)
-                               weakness (and mutable #t) 0
+                               weakness (and mutable #t)
                                equiv-function hash-function))))
 
 ;; If the list of arguments is updated, HASH-TABLE, ALIST->HASH-TABLE,
@@ -325,8 +322,7 @@ is signaled."
                          (error "Two equivalent keys were provided"
                                 (car handle) (car kvs)))
                        (set-cdr! handle (cadr kvs)))
-                     (loop (cddr kvs))))
-              (ht-size! ht capacity))))
+                     (loop (cddr kvs)))))))
       ht)))
 
 (define* (hash-table-unfold stop? mapper successor seed
@@ -341,25 +337,12 @@ the procedure SUCCESSOR to SEED, and repeat this algorithm."
   (let ((result (%make-hash-table equiv-function hash-function
                                   mutable capacity weakness)))
     (with-hashx-values (h a real-table) result
-      (if (ht-weakness result)
-          (let loop ((seed seed))
-            (if (stop? seed)
-                result
-                (receive (key val) (mapper seed)
-                  (hashx-set! h a real-table key val)
-                  (loop (successor seed)))))
-          (let ((size (ht-size result)))
-            (let loop ((seed seed))
-              (if (stop? seed)
-                  result
-                  (receive (key val) (mapper seed)
-                    (let ((handle (hashx-create-handle! h a real-table key
-                                                        ht-unspecified)))
-                      (if (eq? ht-unspecified (cdr handle))
-                          (set! size (+ 1 size)))
-                      (set-cdr! handle val))
-                    (loop (successor seed)))))
-            (ht-size! result size))))
+      (let loop ((seed seed))
+        (if (stop? seed)
+            result
+            (receive (key val) (mapper seed)
+              (hashx-set! h a real-table key val)
+              (loop (successor seed))))))
     result))
 
 (define* (alist->hash-table alist equiv-function hash-function
@@ -372,19 +355,9 @@ come later."
   (let ((result (%make-hash-table equiv-function hash-function
                                   mutable capacity weakness)))
     (with-hashx-values (h a real-table) result
-      (if (ht-weakness result)
-          (for-each (lambda (pair)
-                      (hashx-set! h a real-table (car pair) (cdr pair)))
-                    (reverse alist))
-          (let ((size (ht-size result)))
-            (for-each (lambda (pair)
-                        (let ((handle (hashx-create-handle!
-                                       h a real-table (car pair) ht-unspecified)))
-                          (when (eq? ht-unspecified (cdr handle))
-                            (set! size (+ 1 size))
-                            (set-cdr! handle (cdr pair)))))
-                      alist)
-            (ht-size! result size))))
+      (for-each (lambda (pair)
+                  (hashx-set! h a real-table (car pair) (cdr pair)))
+                (reverse alist)))
     result))
 
 
@@ -415,12 +388,7 @@ KEY isn't present."
 
 (define (hash-table-empty? ht)
   "Returns whether KEY is empty."
-  (if (ht-weakness ht)
-      (call/cc (lambda (exit)
-                 (hash-for-each (lambda (key val) (exit #f))
-                                (ht-real-table ht))
-                 #t))
-      (zero? (ht-size ht))))
+  (zero? (hash-n-items (ht-real-table ht))))
 
 (define (hash-table-contains? ht key)
   "Return whether KEY is a key in HT."
@@ -450,14 +418,8 @@ association is created between KEY and VAL. If there is a previous
 association for KEY, it is deleted."
   (assert-mutable ht)
   (with-hashx-values (h a real-table) ht
-    (if (ht-weakness ht)
-        (hashx-set! h a real-table key val)
-        (let ((handle (hashx-create-handle!
-                       h a real-table key
-                       ht-unspecified)))
-          (if (eq? ht-unspecified (cdr handle))
-              (ht-size! ht (+ 1 (ht-size ht))))
-          (set-cdr! handle val)))))
+    (hashx-set! h a real-table key val))
+  *unspecified*)
 
 (define* (hash-table-set! ht #:optional (key1 ht-unspecified) (val1 ht-unspecified)
                           #:rest args)
@@ -477,25 +439,15 @@ deleted."
       (begin
         (assert-mutable ht)
         (with-hashx-values (h a real-table) ht
-          (let ((set-one! (if (ht-weakness ht)
-                              (lambda (key val)
-                                (hashx-set! h a real-table key val))
-                              (lambda (key val)
-                                (let ((handle (hashx-create-handle!
-                                               h a real-table key
-                                               ht-unspecified)))
-                                  (if (eq? ht-unspecified (cdr handle))
-                                      (ht-size! ht (+ 1 (ht-size ht))))
-                                  (set-cdr! handle val))))))
-            (set-one! key1 val1)
-            (let loop ((kvs args))
-              (cond
-               ((null? kvs) *unspecified*)
-               ((null? (cdr kvs))
-                (error "Odd number of key-value pairs"
-                       (cons* key1 val1 args)))
-               (else (set-one! (car kvs) (cadr kvs))
-                     (loop (cddr kvs))))))))))
+          (hashx-set! h a real-table key1 val1)
+          (let loop ((kvs args))
+            (cond
+             ((null? kvs) *unspecified*)
+             ((null? (cdr kvs))
+              (error "Odd number of key-value pairs"
+                     (cons* key1 val1 args)))
+             (else (hashx-set! h a real-table (car kvs) (cadr kvs))
+                   (loop (cddr kvs)))))))))
 
 (define (hash-table-delete-single! ht key)
   "Deletes KEY and associated value in hash table HT. Returns #t if KEY
@@ -505,7 +457,6 @@ had an association and #f otherwise."
     (if (eq? ht-unspecified (hashx-ref h a real-table key ht-unspecified))
         #f
         (begin (hashx-remove! h a real-table key)
-               (ht-size! ht (- (ht-size ht) 1))
                #t))))
 
 (define* (hash-table-delete! ht #:optional (key1 ht-unspecified) #:rest keys)
@@ -519,7 +470,6 @@ number of keys that had associations."
         (assert-mutable ht)
         (with-hashx-values (h a real-table) ht
           (let* ((count 0)
-                 (size (ht-size ht))
                  (delete-one! (lambda (key)
                                 (when (not (eq? ht-unspecified
                                                 (hashx-ref h a real-table key
@@ -528,8 +478,6 @@ number of keys that had associations."
                                   (hashx-remove! h a real-table key)))))
             (delete-one! key1)
             (for-each delete-one! keys)
-            (unless (or (ht-weakness ht) (zero? count))
-              (ht-size! ht (- size count)))
             count)))))
 
 (define (hash-table-intern! ht key failure)
@@ -546,11 +494,9 @@ is set to the result of calling FAILURE and the new value is returned."
                    (hashx-set! h a real-table key value)
                    value))
                 (else value)))
-        (let ((handle
-               (hashx-create-handle! h a real-table key ht-unspecified)))
+        (let ((handle (hashx-create-handle! h a real-table key ht-unspecified)))
           (if (eq? ht-unspecified (cdr handle))
-              (begin (ht-size! ht (+ 1 (ht-size ht)))
-                     (set-cdr! handle (failure))))
+              (set-cdr! handle (failure)))
           (cdr handle)))))
 
 (define (hash-table-intern!/default ht key default)
@@ -566,11 +512,7 @@ is set to DEFAULT and DEFAULT is returned."
                  (hashx-set! h a real-table key default)
                  default)
                 (else value)))
-        (let ((handle
-               (hashx-create-handle! h a real-table key ht-unspecified)))
-          (if (eq? ht-unspecified (cdr handle))
-              (begin (ht-size! ht (+ 1 (ht-size ht)))
-                     (set-cdr! handle default)))
+        (let ((handle (hashx-create-handle! h a real-table key default)))
           (cdr handle)))))
 
 (define* (hash-table-update! ht key updater #:optional
@@ -601,7 +543,6 @@ provided, or signals an error otherwise."
                    (set-cdr! handle new)))
                 (else
                  (let ((new (updater (failure))))
-                   (ht-size! ht (+ 1 (ht-size ht)))
                    (hashx-set! h a real-table key new)))))))
   *unspecified*)
 
@@ -619,12 +560,8 @@ UPDATER, and setting it to the result thereof."
         ;; J.M. separate the case where ht is weak - don't use handle
         (let* ((old (hashx-ref h a real-table key default)))
           (hashx-set! h a real-table key (updater old)))
-        (let ((handle (hashx-create-handle! h a real-table key
-                                            ht-unspecified)))
-          (if (eq? ht-unspecified (cdr handle))
-              (begin (ht-size! ht (+ 1 (ht-size ht)))
-                     (set-cdr! handle (updater default)))
-              (set-cdr! handle (updater (cdr handle)))))))
+        (let ((handle (hashx-create-handle! h a real-table key default)))
+          (set-cdr! handle (updater (cdr handle))))))
   *unspecified*)
 
 (define (hash-table-pop! ht)
@@ -637,8 +574,6 @@ and value as two values."
      (with-hashx-values (h a real-table) ht
        (hash-for-each (lambda (key value)
                         (hashx-remove! h a real-table key)
-                        (unless (ht-weakness ht)
-                          (ht-size! ht (- (ht-size ht) 1)))
                         (return key value))
                       real-table))
      (error "Hash table is empty" ht))))
@@ -649,7 +584,6 @@ and value as two values."
   (if capacity
       (ht-real-table! ht ((guile-ht-ctor (ht-weakness ht)) capacity))
       (hash-clear! (ht-real-table ht)))
-  (ht-size! ht 0)
   *unspecified*)
 
 
@@ -658,10 +592,7 @@ and value as two values."
 (define (hash-table-size ht)
   "Returns the number of associations in HT. This is guaranteed O(1) for
 tables where #:WEAKNESS is #f."
-  (if (ht-weakness ht)
-      (hash-fold (lambda (key val ans) (+ 1 ans))
-                 0 (ht-real-table ht))
-      (ht-size ht)))
+  (hash-n-items (ht-real-table ht)))
 
 (define (hash-table-keys ht)
   "Returns a list of the keys in HT."
@@ -683,48 +614,60 @@ values in the corresponding order."
                    (ht-real-table ht))
     (values keys vals)))
 
-;;; In a non-weak hash table, we know the size that the key/value vector
-;;; will have. In a weak hash table, we have to iterate throw
-;;; associations of the hash table to compute its size, so it is easier
-;;; to simply call HASH-TABLE-KEYS/HASH-TABLE-VALUES.
 (define (hash-table-key-vector ht)
   "Returns a vector of the keys in HT."
-  (if (ht-weakness ht)
-      (list->vector (hash-table-keys ht))
-      (let* ((len (ht-size ht))
-             (keys (make-vector len)))
-        (hash-fold (lambda (key val i)
-                     (vector-set! keys i key)
-                     (+ i 1))
-                   0 (ht-real-table ht))
+  (let* ((len (hash-table-size ht))
+         (keys (make-vector len))
+         ;; In a weak hash table, some values might get gargabe
+         ;; collected while the procedure is running, so we double-check
+         ;; if we collected the expected number of keys.
+         (new-len (hash-fold (lambda (key val i)
+                               (vector-set! keys i key)
+                               (+ i 1))
+                             0 (ht-real-table ht))))
+    (if (< new-len len)
+        (let ((new-keys (make-vector new-len)))
+          (vector-move-left! keys 0 new-len new-keys 0)
+          new-keys)
         keys)))
 
 (define (hash-table-value-vector ht)
   "Returns a vector of the values in HT."
-  (if (ht-weakness ht)
-      (list->vector (hash-table-values ht))
-      (let* ((len (ht-size ht))
-             (vals (make-vector len)))
-        (hash-fold (lambda (key val i)
-                     (vector-set! vals i val)
-                     (+ i 1))
-                   0 (ht-real-table ht))
+  (let* ((len (hash-table-size ht))
+         (vals (make-vector len))
+         ;; In a weak hash table, some values might get gargabe
+         ;; collected while the procedure is running, so we double-check
+         ;; if we collected the expected number of keys.
+         (new-len (hash-fold (lambda (key val i)
+                               (vector-set! vals i val)
+                               (+ i 1))
+                             0 (ht-real-table ht))))
+    (if (< new-len len)
+        (let ((new-vals (make-vector new-len)))
+          (vector-move-left! vals 0 new-len new-vals 0)
+          new-vals)
         vals)))
 
 (define (hash-table-entry-vectors ht)
   "Returns two values: a vector of the keys and a vector of the
 associated values in the corresponding order."
-  (if (ht-weakness ht)
-      (receive (keys vals) (hash-table-entries ht)
-        (values (list->vector keys) (list->vector vals)))
-      (let* ((len (ht-size ht))
-             (keys (make-vector len))
-             (vals (make-vector len)))
-        (hash-fold (lambda (key val i)
-                     (vector-set! keys i key)
-                     (vector-set! vals i val)
-                     (+ i 1))
-                   0 (ht-real-table ht))
+  (let* ((len (hash-table-size ht))
+         (keys (make-vector len))
+         (vals (make-vector len))
+         ;; In a weak hash table, some values might get gargabe
+         ;; collected while the procedure is running, so we double-check
+         ;; if we collected the expected number of keys.
+         (new-len (hash-fold (lambda (key val i)
+                               (vector-set! keys i key)
+                               (vector-set! vals i val)
+                               (+ i 1))
+                             0 (ht-real-table ht))))
+    (if (< new-len len)
+        (let ((new-keys (make-vector new-len))
+              (new-vals (make-vector new-len)))
+          (vector-move-left! keys 0 new-len new-keys 0)
+          (vector-move-left! vals 0 new-len new-vals 0)
+          (values new-keys new-vals))
         (values keys vals))))
 
 (define (hash-table-find proc ht failure)
@@ -759,15 +702,12 @@ association in hash-table with the value of the association. The key of
 the association and the result of invoking PROC are entered into the new
 hash table, which is then returned."
   (let ((result (%make-hash-table equiv-function hash-function
-                                  mutable capacity weakness))
-        (size 0))
+                                  mutable capacity weakness)))
     (with-hashx-values (h a real-table) result
       (hash-for-each
        (lambda (key val)
-         (hashx-set! h a real-table key (proc val))
-         (set! size (+ 1 size)))
+         (hashx-set! h a real-table key (proc val)))
        (ht-real-table ht)))
-    (ht-size! result size)
     result))
 
 (define (hash-table-map->list proc ht)
@@ -822,8 +762,6 @@ PROC returns true. Returns an unspecified value."
   (with-hashx-values (h a real-table) ht
     (hash-for-each (lambda (key val)
                      (when (proc key val)
-                       (unless (ht-weakness ht)
-                         (ht-size! ht (- (ht-size ht) 1)))
                        (hashx-remove! h a real-table key)))
                    real-table)))
 
@@ -838,15 +776,13 @@ properties as given by keyword arguments, which default to HT
 properties. If MUTABLE is true, the new hash table is mutable,
 otherwise, it is immutable."
   (with-hashx-values (h a real-table) ht
-    (let ((new-real-table ((guile-ht-ctor weakness) capacity))
-          (size 0))
+    (let ((new-real-table ((guile-ht-ctor weakness) capacity)))
       (hash-for-each (lambda (key val)
-                       (hashx-set! h a new-real-table key val)
-                       (set! size (+ 1 size)))
+                       (hashx-set! h a new-real-table key val))
                      real-table)
       ;; Arguments: real-table hash-function associator
-      ;;            weakness mutable? size equivalence-function orig-hash-function
-      (make-generic-hash-table new-real-table h a weakness (and mutable #t) size
+      ;;            weakness mutable? equivalence-function orig-hash-function
+      (make-generic-hash-table new-real-table h a weakness (and mutable #t)
                                (hash-table-equivalence-function ht)
                                (hash-table-hash-function ht)))))
 
@@ -858,8 +794,8 @@ as HT, but with no associations."
   (with-hashx-values (h a real-table) ht
     (let ((new-real-table ((guile-ht-ctor weakness) capacity)))
       ;; Arguments: real-table hash-function associator
-      ;;            weakness mutable? size equivalence-function orig-hash-function
-      (make-generic-hash-table new-real-table h a weakness (and mutable #t) 0
+      ;;            weakness mutable? equivalence-function orig-hash-function
+      (make-generic-hash-table new-real-table h a weakness (and mutable #t)
                                (hash-table-equivalence-function ht)
                                (hash-table-hash-function ht)))))
 

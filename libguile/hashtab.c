@@ -210,6 +210,22 @@ SCM_DEFINE (scm_hash_table_p, "hash-table?", 1, 0, 0,
 }
 #undef FUNC_NAME
 
+SCM_DEFINE (scm_hash_n_items, "hash-n-items", 1, 0, 0,
+            (SCM table),
+            "Return the number of elements in the given hash TABLE.")
+#define FUNC_NAME s_scm_hash_n_items
+{
+  if (SCM_WEAK_TABLE_P (table))
+    {
+      return scm_weak_table_n_items (table);
+    }
+
+  SCM_VALIDATE_HASHTABLE (1, table);
+
+  return scm_from_ulong (SCM_HASHTABLE_N_ITEMS (table));
+}
+#undef FUNC_NAME
+
 
 
 /* Accessing hash table entries.  */
@@ -986,8 +1002,7 @@ count_proc (void *pred, SCM key, SCM data, SCM value)
 SCM_DEFINE (scm_hash_count, "hash-count", 2, 0, 0,
             (SCM pred, SCM table),
             "Return the number of elements in the given hash TABLE that\n"
-            "cause `(PRED KEY VALUE)' to return true.  To quickly determine\n"
-            "the total number of elements, use `(const #t)' for PRED.")
+            "cause `(PRED KEY VALUE)' to return true.")
 #define FUNC_NAME s_scm_hash_count
 {
   SCM init;

@@ -516,6 +516,20 @@ scm_weak_table_p (SCM obj)
 }
 
 SCM
+scm_weak_table_n_items (SCM table)
+#define FUNC_NAME "weak-table-n-items"
+{
+  scm_t_weak_table *t;
+
+  SCM_VALIDATE_WEAK_TABLE (1, table);
+
+  t = SCM_WEAK_TABLE (table);
+
+  return scm_from_ulong (t->n_items);
+}
+#undef FUNC_NAME
+
+SCM
 scm_c_weak_table_ref (SCM table, unsigned long raw_hash,
                       scm_t_table_predicate_fn pred,
                       void *closure, SCM dflt)
