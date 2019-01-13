@@ -294,6 +294,7 @@ SOURCES =					\
   srfi/srfi-88.scm				\
   srfi/srfi-98.scm				\
   srfi/srfi-111.scm				\
+  srfi/srfi-125.scm				\
   srfi/srfi-126.scm				\
   srfi/srfi-128/gnu.scm				\
   srfi/srfi-128.scm				\
