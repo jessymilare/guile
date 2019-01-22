@@ -66,6 +66,7 @@ SOURCES =					\
   ice-9/futures.scm				\
   ice-9/gap-buffer.scm				\
   ice-9/getopt-long.scm				\
+  ice-9/generic-hash-tables.scm                 \
   ice-9/hash-table.scm				\
   ice-9/hcons.scm				\
   ice-9/history.scm				\
@@ -293,6 +294,10 @@ SOURCES =					\
   srfi/srfi-88.scm				\
   srfi/srfi-98.scm				\
   srfi/srfi-111.scm				\
+  srfi/srfi-125.scm				\
+  srfi/srfi-126.scm				\
+  srfi/srfi-128/gnu.scm				\
+  srfi/srfi-128.scm				\
 						\
   statprof.scm					\
 						\

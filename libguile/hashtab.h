@@ -78,6 +78,7 @@ SCM_API SCM scm_c_make_hash_table (unsigned long k);
 SCM_API SCM scm_make_hash_table (SCM n);
 
 SCM_API SCM scm_hash_table_p (SCM h);
+SCM_API SCM scm_hash_n_items (SCM hash);
 
 SCM_INTERNAL void scm_i_rehash (SCM table, scm_t_hash_fn hash_fn,
 				void *closure, const char *func_name);

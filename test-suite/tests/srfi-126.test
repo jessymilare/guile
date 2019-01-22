@@ -1,0 +1,344 @@
+;;;; srfi-126.test --- Test suite for SRFI 126 -*- scheme -*-
+;;;;
+;;;; Copyright (C) 2019 Free Software Foundation, Inc.
+;;;;
+;;;; This library is free software; you can redistribute it and/or
+;;;; modify it under the terms of the GNU Lesser General Public
+;;;; License as published by the Free Software Foundation; either
+;;;; version 3 of the License, or (at your option) any later version.
+;;;;
+;;;; This library is distributed in the hope that it will be useful,
+;;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;;;; Lesser General Public License for more details.
+;;;;
+;;;; You should have received a copy of the GNU Lesser General Public
+;;;; License along with this library; if not, write to the Free Software
+;;;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+;;; The following tests are the tests from SRFI-126 reference
+;;; implementation ported to Guile test suite.
+
+(define-module (test-srfi-126)
+  #:use-module (test-suite lib)
+  #:use-module (srfi srfi-126)
+  #:use-module (srfi srfi-1)
+  #:use-module (srfi srfi-2)
+  #:use-module (srfi srfi-8))
+
+(define-syntax with-elt-in-list
+  (syntax-rules ()
+    ((with-elt-in-list arg arg-list expr ...)
+     (let loop ((arg-list* arg-list))
+       (or (null? arg-list*)
+           (and (let ((arg (car arg-list*)))
+                  expr ...)
+                (loop (cdr arg-list*))))))))
+
+(define (exact-integer? obj)
+  (and (integer? obj) (exact? obj)))
+
+(define (test-str-weakness str weakness)
+  (if (not weakness) str (format #f "~a (weakness: ~a)" str weakness)))
+
+
+
+(with-test-prefix "SRFI-126"
+
+  ;; The following tests are done once with each kind of weakness
+  (with-elt-in-list weakness (list #f 'weak-key 'weak-value 'weak-key-and-value)
+
+    (with-test-prefix "eq"
+      (let ((tables (list (and (not weakness)
+                               (make-eq-hashtable))
+                          (make-eq-hashtable 10 weakness)
+                          (make-eq-hashtable #f weakness)
+                          (make-hashtable #f eq? #f weakness)
+                          (and (not weakness)
+                               (alist->eq-hashtable '((a . b) (c . d))))
+                          (alist->eq-hashtable 10 weakness '((a . b) (c . d)))
+                          (alist->eq-hashtable #f weakness '((a . b) (c . d))))))
+        (do ((tables tables (cdr tables))
+             (i 0 (+ i 1)))
+            ((null? tables))
+          (and-let* ((table (car tables)))
+            (with-test-prefix (test-str-weakness (format #f "table ~a" i) weakness)
+              (pass-if (hashtable? table))
+              (pass-if-equal #f (hashtable-hash-function table))
+              (pass-if-equal eq? (hashtable-equivalence-function table))
+              (pass-if-equal weakness (hashtable-weakness table))
+              (pass-if (hashtable-mutable? table)))))))
+
+    (with-test-prefix "eqv"
+      (let ((tables (list (and (not weakness)
+                               (make-eqv-hashtable))
+                          (make-eqv-hashtable 10 weakness)
+                          (make-eqv-hashtable #f weakness)
+                          (make-hashtable #f eqv? #f weakness)
+                          (and (not weakness)
+                               (alist->eqv-hashtable '((a . b) (c . d))))
+                          (alist->eqv-hashtable 10 weakness '((a . b) (c . d)))
+                          (alist->eqv-hashtable #f weakness '((a . b) (c . d))))))
+        (do ((tables tables (cdr tables))
+             (i 0 (+ i 1)))
+            ((null? tables))
+          (and-let* ((table (car tables)))
+            (with-test-prefix (test-str-weakness (format #f "table ~a" i) weakness)
+              (pass-if (hashtable? table))
+              (pass-if-equal #f (hashtable-hash-function table))
+              (pass-if-equal eqv? (hashtable-equivalence-function table))
+              (pass-if-equal weakness (hashtable-weakness table))
+              (pass-if (hashtable-mutable? table)))))))
+
+    (with-test-prefix "equal"
+      (let ((tables (list (and (not weakness)
+                               (make-hashtable equal-hash equal?))
+                          (make-hashtable equal-hash equal? 10 weakness)
+                          (make-hashtable equal-hash equal? #f weakness)
+                          (and (not weakness)
+                               (alist->hashtable equal-hash equal? '((a . b) (c . d))))
+                          (alist->hashtable equal-hash equal? 10 weakness
+                                            '((a . b) (c . d)))
+                          (alist->hashtable equal-hash equal? #f weakness
+                                            '((a . b) (c . d)))
+                          (and (not weakness)
+                               (make-hashtable (cons equal-hash equal-hash) equal?)))))
+        (do ((tables tables (cdr tables))
+             (i 0 (+ i 1)))
+            ((null? tables))
+          (and-let* ((table (car tables)))
+            (with-test-prefix (test-str-weakness (format #f "table ~a" i) weakness)
+              (pass-if (hashtable? table))
+              (pass-if-equal equal-hash (hashtable-hash-function table))
+              (pass-if-equal equal? (hashtable-equivalence-function table))
+              (pass-if-equal weakness (hashtable-weakness table))
+              (pass-if (hashtable-mutable? table)))))))
+
+    (with-test-prefix "alist"
+      (let ((tables (list (and (not weakness)
+                               (alist->eq-hashtable '((a . b) (a . c))))
+                          (and (not weakness)
+                               (alist->eqv-hashtable '((a . b) (a . c))))
+                          (and (not weakness)
+                               (alist->hashtable equal-hash equal?
+                                                 '((a . b) (a . c))))
+                          (alist->eq-hashtable #f weakness '((a . b) (a . c)))
+                          (alist->eqv-hashtable #f weakness '((a . b) (a . c)))
+                          (alist->hashtable equal-hash equal? #f weakness
+                                            '((a . b) (a . c))))))
+        (do ((tables tables (cdr tables))
+             (i 0 (+ i 1)))
+            ((null? tables))
+          (and-let* ((table (car tables)))
+            (with-test-prefix (test-str-weakness (format #f "table ~a" i) weakness)
+              (pass-if-equal 'b (hashtable-ref table 'a)))))))
+
+    (with-test-prefix "procedures"
+      (with-test-prefix "basics"
+        (let ((table (make-eq-hashtable #f weakness)))
+          (with-test-prefix "ref"
+            (pass-if-exception "key not found"
+                '(misc-error . "^Key not in table")
+              (hashtable-ref table 'a))
+            (pass-if-equal 'b (hashtable-ref table 'a 'b))
+            (pass-if (not (hashtable-contains? table 'a)))
+            (pass-if-equal 0 (hashtable-size table)))
+          (with-test-prefix "set"
+            (hashtable-set! table 'a 'c)
+            (pass-if-equal 'c (hashtable-ref table 'a))
+            (pass-if-equal 'c (hashtable-ref table 'a 'b))
+            (pass-if (hashtable-contains? table 'a))
+            (pass-if-equal 1 (hashtable-size table)))
+          (with-test-prefix "delete"
+            (hashtable-delete! table 'a)
+            (pass-if-exception "key not found"
+                '(misc-error . "^Key not in table")
+              (hashtable-ref table 'a))
+            (pass-if-equal 'b (hashtable-ref table 'a 'b))
+            (pass-if (not (hashtable-contains? table 'a)))
+            (pass-if-equal 0 (hashtable-size table))))))
+
+    (with-test-prefix "advanced"
+      (let ((table (make-eq-hashtable)))
+        (with-test-prefix "lookup"
+          (receive (x found?) (hashtable-lookup table 'a)
+            (pass-if (not found?))))
+        (with-test-prefix "update"
+          (pass-if-exception "key not found"
+              '(misc-error . "^Key not in table")
+            (hashtable-update! table 'a (lambda (x) (+ x 1))))
+          (hashtable-update! table 'a (lambda (x) (+ x 1)) 0)
+          (receive (x found?) (hashtable-lookup table 'a)
+            (pass-if-equal 1 x)
+            (pass-if found?))
+          (hashtable-update! table 'a (lambda (x) (+ x 1)))
+          (receive (x found?) (hashtable-lookup table 'a)
+            (pass-if-equal x 2)
+            (pass-if found?))
+          (hashtable-update! table 'a (lambda (x) (+ x 1)) 0)
+          (receive (x found?) (hashtable-lookup table 'a)
+            (pass-if-equal x 3)
+            (pass-if found?)))
+        (with-test-prefix "intern"
+          (pass-if-equal 0 (hashtable-intern! table 'b (lambda () 0)))
+          (pass-if-equal 0 (hashtable-intern! table 'b (lambda () 1))))))
+
+    (with-test-prefix "copy/clear"
+      (let ((table (alist->hashtable equal-hash equal? #f weakness '((a . b)))))
+        (with-test-prefix "copy"
+          (let ((table2 (hashtable-copy table)))
+            (pass-if-equal equal-hash (hashtable-hash-function table2))
+            (pass-if-equal equal? (hashtable-equivalence-function table2))
+            (pass-if-equal 'b (hashtable-ref table2 'a))
+            (pass-if-equal weakness (hashtable-weakness table2))
+            (pass-if-exception "set! immutable table"
+                '(misc-error . "^Hash table is not mutable")
+              (hashtable-set! table2 'a 'c)))
+          (let ((table2 (hashtable-copy table #f)))
+            (pass-if-equal equal-hash (hashtable-hash-function table2))
+            (pass-if-equal equal? (hashtable-equivalence-function table2))
+            (pass-if-equal 'b (hashtable-ref table2 'a))
+            (pass-if-equal weakness (hashtable-weakness table2))
+            (pass-if-exception "set! immutable table"
+                '(misc-error . "^Hash table is not mutable")
+              (hashtable-set! table2 'a 'c)))
+          (let ((table2 (hashtable-copy table #t)))
+            (pass-if-equal equal-hash (hashtable-hash-function table2))
+            (pass-if-equal equal? (hashtable-equivalence-function table2))
+            (pass-if-equal 'b (hashtable-ref table2 'a))
+            (pass-if-equal weakness (hashtable-weakness table2))
+            (hashtable-set! table2 'a 'c)
+            (pass-if-equal 'c (hashtable-ref table2 'a)))
+          (let ((table2 (hashtable-copy table #f #f)))
+            (pass-if-equal equal-hash (hashtable-hash-function table2))
+            (pass-if-equal equal? (hashtable-equivalence-function table2))
+            (pass-if-equal #f (hashtable-weakness table2))))
+
+        (with-test-prefix "clear"
+          (let ((table2 (hashtable-copy table #t)))
+            (hashtable-clear! table2)
+            (pass-if-equal 0 (hashtable-size table2)))
+          (let ((table2 (hashtable-copy table #t)))
+            (hashtable-clear! table2 10)
+            (pass-if-equal 0 (hashtable-size table2))))
+
+        (with-test-prefix "empty-copy"
+          (let ((table2 (hashtable-empty-copy table)))
+            (pass-if-equal equal-hash (hashtable-hash-function table2))
+            (pass-if-equal equal? (hashtable-equivalence-function table2))
+            (pass-if-equal 0 (hashtable-size table2)))
+          (let ((table2 (hashtable-empty-copy table 10)))
+            (pass-if-equal equal-hash (hashtable-hash-function table2))
+            (pass-if-equal equal? (hashtable-equivalence-function table2))
+            (pass-if-equal 0 (hashtable-size table2))))))
+
+    (with-test-prefix "keys/values"
+      (let ((table (alist->eq-hashtable '((a . b) (c . d)))))
+        (pass-if (lset= eq? '(a c) (vector->list (hashtable-keys table))))
+        (pass-if (lset= eq? '(b d) (vector->list (hashtable-values table))))
+        (receive (keys values) (hashtable-entries table)
+          (pass-if (lset= eq? '(a c) (vector->list keys)))
+          (pass-if (lset= eq? '(b d) (vector->list values))))
+        (pass-if (lset= eq? '(a c) (hashtable-key-list table)))
+        (pass-if (lset= eq? '(b d) (hashtable-value-list table)))
+        (receive (keys values) (hashtable-entry-lists table)
+          (pass-if (lset= eq? '(a c) keys))
+          (pass-if (lset= eq? '(b d) values)))))
+
+    (with-test-prefix "iteration"
+      (with-test-prefix "walk"
+        (let ((keys '())
+              (values '()))
+          (hashtable-walk (alist->eq-hashtable '((a . b) (c . d)))
+            (lambda (k v)
+              (set! keys (cons k keys))
+              (set! values (cons v values))))
+          (pass-if (lset= eq? '(a c) keys))
+          (pass-if (lset= eq? '(b d) values))))
+
+      (with-test-prefix "update-all"
+        (let ((table (alist->eq-hashtable '((a . b) (c . d)))))
+          (hashtable-update-all! table
+            (lambda (k v)
+              (string->symbol (string-append (symbol->string v) "x"))))
+          (pass-if (lset= eq? '(a c) (hashtable-key-list table)))
+          (pass-if (lset= eq? '(bx dx) (hashtable-value-list table)))))
+
+      (with-test-prefix "prune"
+        (let ((table (alist->eq-hashtable '((a . b) (c . d)))))
+          (hashtable-prune! table (lambda (k v) (eq? k 'a)))
+          (pass-if (not (hashtable-contains? table 'a)))
+          (pass-if (hashtable-contains? table 'c))))
+
+      (with-test-prefix "merge"
+        (let ((table (alist->eq-hashtable '((a . b) (c . d))))
+              (table2 (alist->eq-hashtable '((a . x) (e . f)))))
+          (hashtable-merge! table table2)
+          (pass-if (lset= eq? '(a c e) (hashtable-key-list table)))
+          (pass-if (lset= eq? '(x d f) (hashtable-value-list table)))))
+
+      (with-test-prefix "sum"
+        (let ((table (alist->eq-hashtable '((a . b) (c . d)))))
+          (pass-if (lset= eq? '(a b c d)
+                          (hashtable-sum table '()
+                            (lambda (k v acc)
+                              (lset-adjoin eq? acc k v)))))))
+
+      (with-test-prefix "map->lset"
+        (let ((table (alist->eq-hashtable '((a . b) (c . d)))))
+          (pass-if (lset= equal? '((a . b) (c . d))
+                          (hashtable-map->lset table cons)))))
+
+      (with-test-prefix "find"
+        (let ((table (alist->eq-hashtable '((a . b) (c . d)))))
+          (receive (k v f?) (hashtable-find table
+                              (lambda (k v)
+                                (eq? k 'a)))
+            (pass-if (and f? (eq? k 'a) (eq? v 'b))))
+          (receive (k v f?) (hashtable-find table (lambda (k v) #f))
+            (pass-if (not f?)))))
+
+      (with-test-prefix "misc"
+
+        (with-test-prefix "empty?"
+          (pass-if (hashtable-empty? (alist->eq-hashtable '())))
+          (pass-if (not (hashtable-empty? (alist->eq-hashtable '((a . b)))))))
+
+        (with-test-prefix "pop!"
+          (pass-if-exception ""
+              '(misc-error . "^Hash table is empty")
+            (hashtable-pop! (make-eq-hashtable)))
+          (let ((table (alist->eq-hashtable '((a . b)))))
+            (receive (k v) (hashtable-pop! table)
+              (pass-if-equal 'a k)
+              (pass-if-equal 'b v)
+              (pass-if (hashtable-empty? table)))))
+
+        (with-test-prefix "inc!"
+          (let ((table (alist->eq-hashtable '((a . 0)))))
+            (hashtable-inc! table 'a)
+            (pass-if-equal 1 (hashtable-ref table 'a))
+            (hashtable-inc! table 'a 2)
+            (pass-if-equal 3 (hashtable-ref table 'a))))
+
+        (with-test-prefix "dec!"
+          (let ((table (alist->eq-hashtable '((a . 0)))))
+            (hashtable-dec! table 'a)
+            (pass-if-equal -1 (hashtable-ref table 'a))
+            (hashtable-dec! table 'a 2)
+            (pass-if-equal -3 (hashtable-ref table 'a))))))
+
+    (with-test-prefix "hashing"
+      (pass-if (exact-integer? (hash-salt)))
+      (pass-if (not (negative? (hash-salt))))
+      (pass-if (= (hash-salt) (hash-salt)))
+      (pass-if (= (equal-hash (list "foo" 'bar 42))
+                  (equal-hash (list "foo" 'bar 42))))
+      (pass-if (= (string-hash (string-copy "foo"))
+                  (string-hash (string-copy "foo"))))
+      (pass-if (= (string-ci-hash (string-copy "foo"))
+                  (string-ci-hash (string-copy "FOO"))))
+      (pass-if (= (symbol-hash (string->symbol "foo"))
+                  (symbol-hash (string->symbol "foo")))))
+    )
+  )

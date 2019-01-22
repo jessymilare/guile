@@ -45,6 +45,7 @@ typedef SCM (*scm_t_table_fold_fn) (void *closure, SCM k, SCM v, SCM result);
 SCM_INTERNAL SCM scm_c_make_weak_table (unsigned long k,
                                         scm_t_weak_table_kind kind);
 SCM_INTERNAL SCM scm_weak_table_p (SCM h);
+SCM_INTERNAL SCM scm_weak_table_n_items (SCM table);
 
 SCM_INTERNAL SCM scm_c_weak_table_ref (SCM table, unsigned long raw_hash,
                                        scm_t_table_predicate_fn pred,
@@ -63,7 +64,7 @@ SCM_INTERNAL void scm_weak_table_remq_x (SCM table, SCM key);
 SCM_INTERNAL void scm_weak_table_clear_x (SCM table);
 
 SCM_INTERNAL SCM scm_c_weak_table_fold (scm_t_table_fold_fn proc, void *closure,
-                                      SCM init, SCM table);
+                                        SCM init, SCM table);
 SCM_INTERNAL SCM scm_weak_table_fold (SCM proc, SCM init, SCM table);
 SCM_INTERNAL void scm_weak_table_for_each (SCM proc, SCM table);
 SCM_INTERNAL SCM scm_weak_table_map_to_list (SCM proc, SCM table);
